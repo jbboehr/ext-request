@@ -16,7 +16,6 @@
 #include "ext/standard/head.h"
 #include "ext/standard/php_string.h"
 #include "ext/standard/url.h"
-#include "ext/spl/spl_exceptions.h"
 
 #include "Zend/zend_API.h"
 #include "Zend/zend_exceptions.h"
@@ -26,11 +25,13 @@
 #include "Zend/zend_smart_str.h"
 
 #include "php_request.h"
+#include "request_utils.h"
 
 static PHP_MINIT_FUNCTION(sapirequest);
 static PHP_MINIT_FUNCTION(sapiresponse);
 static PHP_MINIT_FUNCTION(sapiresponseinterface);
 static PHP_MINIT_FUNCTION(sapiresponsesender);
+PHP_MINIT_FUNCTION(sapiupload);
 static PHP_MSHUTDOWN_FUNCTION(sapirequest);
 void sapi_request_parse_forwarded(zval *return_value, const unsigned char *str, size_t len);
 
@@ -41,6 +42,7 @@ static PHP_MINIT_FUNCTION(request)
     PHP_MINIT(sapiresponseinterface)(INIT_FUNC_ARGS_PASSTHRU); // must be before sapiresponse
     PHP_MINIT(sapiresponse)(INIT_FUNC_ARGS_PASSTHRU);
     PHP_MINIT(sapiresponsesender)(INIT_FUNC_ARGS_PASSTHRU);
+    PHP_MINIT(sapiupload)(INIT_FUNC_ARGS_PASSTHRU);
     return SUCCESS;
 }
 /* }}} */
@@ -91,6 +93,7 @@ PHP_REQUEST_API zend_class_entry *SapiRequest_ce_ptr;
 PHP_REQUEST_API zend_class_entry *SapiResponse_ce_ptr;
 PHP_REQUEST_API zend_class_entry *SapiResponseInterface_ce_ptr;
 PHP_REQUEST_API zend_class_entry *SapiResponseSender_ce_ptr;
+extern PHP_REQUEST_API zend_class_entry *SapiUpload_ce_ptr;
 
 /* {{{ sapi_request_normalize_header_name */
 void sapi_request_normalize_header_name(char *key, size_t key_length)
@@ -132,12 +135,6 @@ extern void sapi_request_normalize_header_name(char *key, size_t key_length);
 static zend_object_handlers SapiRequest_obj_handlers;
 static HashTable SapiRequest_prop_handlers;
 
-struct prop_handlers {
-    zend_object_has_property_t has_property;
-    zend_object_read_property_t read_property;
-    zend_object_write_property_t write_property;
-    zend_object_unset_property_t unset_property;
-};
 
 /* {{{ Argument Info */
 ZEND_BEGIN_ARG_INFO_EX(SapiRequest_construct_args, 0, 0, 1)
@@ -379,13 +376,45 @@ static inline void sapi_request_upload_from_nested(zval *return_value, zval *nes
     } ZEND_HASH_FOREACH_END();
 }
 
+static inline void sapi_request_copy_unnested_upload_key(zval *out, zval *in, const char *key, size_t key_len)
+{
+    zval *tmp = zend_hash_str_find(Z_ARRVAL_P(in), key, key_len);
+    if (tmp) {
+        ZVAL_ZVAL(out, tmp, 1, 0);
+    } else {
+        ZVAL_NULL(out);
+    }
+}
+
 static void sapi_request_upload_from_spec(zval *return_value, zval *file)
 {
     zval *tmp = zend_hash_str_find(Z_ARRVAL_P(file), ZEND_STRL("tmp_name"));
     if( tmp && Z_TYPE_P(tmp) == IS_ARRAY ) {
         sapi_request_upload_from_nested(return_value, file, tmp);
     } else {
-        ZVAL_ZVAL(return_value, file, 0, 0);
+        object_init_ex(return_value, SapiUpload_ce_ptr);
+
+        zval params[5] = {0};
+        sapi_request_copy_unnested_upload_key(&params[0], file, ZEND_STRL("name"));
+        sapi_request_copy_unnested_upload_key(&params[1], file, ZEND_STRL("type"));
+        sapi_request_copy_unnested_upload_key(&params[2], file, ZEND_STRL("size"));
+        sapi_request_copy_unnested_upload_key(&params[3], file, ZEND_STRL("tmp_name"));
+        sapi_request_copy_unnested_upload_key(&params[4], file, ZEND_STRL("error"));
+
+        zval z_const = {0};
+        ZVAL_STRING(&z_const, "__construct");
+
+        zval rv = {0};
+        call_user_function(&SapiUpload_ce_ptr->function_table, return_value, &z_const, &rv, 5, params);
+
+        zval_dtor(&rv);
+        zval_dtor(&z_const);
+
+        zval_dtor(&params[0]);
+        zval_dtor(&params[1]);
+        zval_dtor(&params[2]);
+        zval_dtor(&params[3]);
+        zval_dtor(&params[4]);
     }
 }
 
@@ -473,49 +502,13 @@ static void sapi_request_assert_immutable(zval *value, const char *desc, size_t 
 }
 /* }}} */
 
-/* {{{ sapi_request_object_default_has_property */
+/* {{{ sapi_request_object_content_read_property */
 #if PHP_MAJOR_VERSION >= 8
-static int sapi_request_object_default_has_property(zend_object *object, zend_object *member, int check_empty, void **cache_slot)
+static zval *sapi_request_object_content_read_property(zend_object *object, zend_string *member, int type, void **cache_slot, zval *rv)
 {
-    return 1;
-}
-#else
-static int sapi_request_object_default_has_property(zval *object, zval *member, int check_empty, void **cache_slot)
-{
-    return 1;
-}
-#endif
-/* }}} */
-
-/* {{{ sapi_request_throw_readonly_exception */
-static inline void sapi_request_throw_readonly_exception(zend_object *object, zend_string *member)
-{
-    zend_string *ce_name = object->ce->name;
-    zend_throw_exception_ex(spl_ce_RuntimeException, 0, "%.*s::$%.*s is read-only.", (int)ZSTR_LEN(ce_name), ZSTR_VAL(ce_name), (int)ZSTR_LEN(member), ZSTR_VAL(member));
-}
-/* }}} */
-
-/* {{{ sapi_request_object_default_read_property */
-#if PHP_MAJOR_VERSION >= 8
-static zval *sapi_request_object_default_read_property(zend_object *object, zend_string *member, int type, void **cache_slot, zval *rv)
-{
-    zval *retval;
+    zval *retval = request_readonly_read_property_handler(object, member, type, cache_slot, rv);
     php_stream *stream;
     zend_string *str;
-
-    ZVAL_UNDEF(rv);
-    retval = std_object_handlers.read_property(object, member, type, cache_slot, rv);
-
-    // Make sure the property can't be modified
-    if( !Z_ISREF_P(rv) && (type == BP_VAR_W || type == BP_VAR_RW  || type == BP_VAR_UNSET) ) {
-        SEPARATE_ZVAL(rv);
-        sapi_request_throw_readonly_exception(object, member);
-    }
-
-    if (strcmp(ZSTR_VAL(member), "content")) {
-        // non-content member
-        return retval;
-    }
 
     if (Z_TYPE_P(retval) == IS_STRING) {
         // content is already a string
@@ -535,25 +528,11 @@ static zval *sapi_request_object_default_read_property(zend_object *object, zend
     return rv;
 }
 #else
-static zval *sapi_request_object_default_read_property(zval *object, zval *member, int type, void **cache_slot, zval *rv)
+static zval *sapi_request_object_content_read_property(zval *object, zval *member, int type, void **cache_slot, zval *rv)
 {
-    zval *retval;
+    zval *retval = request_readonly_read_property_handler(object, member, type, cache_slot, rv);
     php_stream *stream;
     zend_string *str;
-
-    ZVAL_UNDEF(rv);
-    retval = std_object_handlers.read_property(object, member, type, cache_slot, rv);
-
-    // Make sure the property can't be modified
-    if( !Z_ISREF_P(rv) && (type == BP_VAR_W || type == BP_VAR_RW  || type == BP_VAR_UNSET) ) {
-        SEPARATE_ZVAL(rv);
-        sapi_request_throw_readonly_exception(Z_OBJ_P(object), Z_STR_P(member));
-    }
-
-    if (strcmp(Z_STRVAL_P(member), "content")) {
-        // non-content member
-        return retval;
-    }
 
     if (Z_TYPE_P(retval) == IS_STRING) {
         // content is already a string
@@ -579,31 +558,17 @@ static zval *sapi_request_object_default_read_property(zval *object, zval *membe
 #if PHP_MAJOR_VERSION >= 8
 static zval *sapi_request_object_default_write_property(zend_object *object, zend_string *member, zval *value, void **cache_slot)
 {
-    if( zend_get_executed_scope() != SapiRequest_ce_ptr ) {
-        sapi_request_throw_readonly_exception(object, member);
-        return NULL;
-    } else {
-        return std_object_handlers.write_property(object, member, value, cache_slot);
-    }
+    return request_readonly_write_property_handler(SapiRequest_ce_ptr, object, member, value, cache_slot);
 }
 #elif PHP_MAJOR_VERSION >= 7 && PHP_MINOR_VERSION >= 4
 static zval *sapi_request_object_default_write_property(zval *object, zval *member, zval *value, void **cache_slot)
 {
-    if( zend_get_executed_scope() != SapiRequest_ce_ptr ) {
-        sapi_request_throw_readonly_exception(Z_OBJ_P(object), Z_STR_P(member));
-        return NULL;
-    } else {
-        return std_object_handlers.write_property(object, member, value, cache_slot);
-    }
+    return request_readonly_write_property_handler(SapiRequest_ce_ptr, object, member, value, cache_slot);
 }
 #else
 static void sapi_request_object_default_write_property(zval *object, zval *member, zval *value, void **cache_slot)
 {
-    if( zend_get_executed_scope() != SapiRequest_ce_ptr ) {
-        sapi_request_throw_readonly_exception(Z_OBJ_P(object), Z_STR_P(member));
-    } else {
-        std_object_handlers.write_property(object, member, value, cache_slot);
-    }
+    request_readonly_write_property_handler(SapiRequest_ce_ptr, object, member, value, cache_slot);
 }
 #endif
 /* }}} */
@@ -612,20 +577,12 @@ static void sapi_request_object_default_write_property(zval *object, zval *membe
 #if PHP_MAJOR_VERSION >= 8
 static void sapi_request_object_default_unset_property(zend_object *object, zend_string *member, void **cache_slot)
 {
-    if( zend_get_executed_scope() != SapiRequest_ce_ptr ) {
-        sapi_request_throw_readonly_exception(object, member);
-    } else {
-        std_object_handlers.unset_property(object, member, cache_slot);
-    }
+    request_readonly_unset_property_handler(SapiRequest_ce_ptr, object, member, cache_slot);
 }
 #else
 static void sapi_request_object_default_unset_property(zval *object, zval *member, void **cache_slot)
 {
-    if( zend_get_executed_scope() != SapiRequest_ce_ptr ) {
-        sapi_request_throw_readonly_exception(Z_OBJ_P(object), Z_STR_P(member));
-    } else {
-        std_object_handlers.unset_property(object, member, cache_slot);
-    }
+    request_readonly_unset_property_handler(SapiRequest_ce_ptr, object, member, cache_slot);
 }
 #endif
 /* }}} */
@@ -634,14 +591,12 @@ static void sapi_request_object_default_unset_property(zval *object, zval *membe
 #if PHP_MAJOR_VERSION >= 8
 static int sapi_request_object_has_property(zend_object *object, zend_string *member, int has_set_exists, void **cache_slot)
 {
-    struct prop_handlers *hnd = zend_hash_str_find_ptr(&SapiRequest_prop_handlers, ZSTR_VAL(member), ZSTR_LEN(member));
-    return (hnd ? hnd->has_property : std_object_handlers.has_property)(object, member, has_set_exists, cache_slot);
+    return request_has_property_dispatcher(&SapiRequest_prop_handlers, object, member, has_set_exists, cache_slot);
 }
 #else
 static int sapi_request_object_has_property(zval *object, zval *member, int has_set_exists, void **cache_slot)
 {
-    struct prop_handlers *hnd = zend_hash_str_find_ptr(&SapiRequest_prop_handlers, Z_STRVAL_P(member), Z_STRLEN_P(member));
-    return (hnd ? hnd->has_property : std_object_handlers.has_property)(object, member, has_set_exists, cache_slot);
+    return request_has_property_dispatcher(&SapiRequest_prop_handlers, object, member, has_set_exists, cache_slot);
 }
 #endif
 /* }}} */
@@ -650,28 +605,12 @@ static int sapi_request_object_has_property(zval *object, zval *member, int has_
 #if PHP_MAJOR_VERSION >= 8
 static zval *sapi_request_object_read_property(zend_object *object, zend_string *member, int type, void **cache_slot, zval *rv)
 {
-    if( !object->ce->__get && !std_object_handlers.has_property(object, member, 2, cache_slot) ) {
-        zend_string *ce_name = object->ce->name;
-        zend_throw_exception_ex(spl_ce_RuntimeException, 0, "%.*s::$%.*s does not exist.", (int)ZSTR_LEN(ce_name), ZSTR_VAL(ce_name), (int)ZSTR_LEN(member), ZSTR_VAL(member));
-        ZVAL_NULL(rv);
-        return rv;
-    }
-    struct prop_handlers *hnd = zend_hash_str_find_ptr(&SapiRequest_prop_handlers, ZSTR_VAL(member), ZSTR_LEN(member));
-    return (hnd ? hnd->read_property : std_object_handlers.read_property)(object, member, type, cache_slot, rv);
+    return request_read_property_dispatcher(&SapiRequest_prop_handlers, object, member, type, cache_slot, rv);
 }
 #else
 static zval *sapi_request_object_read_property(zval *object, zval *member, int type, void **cache_slot, zval *rv)
 {
-    if( !Z_OBJCE_P(object)->__get && !std_object_handlers.has_property(object, member, 2, cache_slot) ) {
-        zend_string *ce_name = Z_OBJCE_P(object)->name;
-        zend_string *member_str = zval_get_string(member);
-        zend_throw_exception_ex(spl_ce_RuntimeException, 0, "%.*s::$%.*s does not exist.", (int)ZSTR_LEN(ce_name), ZSTR_VAL(ce_name), (int)ZSTR_LEN(member_str), ZSTR_VAL(member_str));
-        zend_string_release(member_str);
-        ZVAL_NULL(rv);
-        return rv;
-    }
-    struct prop_handlers *hnd = zend_hash_str_find_ptr(&SapiRequest_prop_handlers, Z_STRVAL_P(member), Z_STRLEN_P(member));
-    return (hnd ? hnd->read_property : std_object_handlers.read_property)(object, member, type, cache_slot, rv);
+    return request_read_property_dispatcher(&SapiRequest_prop_handlers, object, member, type, cache_slot, rv);
 }
 #endif
 /* }}} */
@@ -680,57 +619,17 @@ static zval *sapi_request_object_read_property(zval *object, zval *member, int t
 #if PHP_MAJOR_VERSION >= 8
 static zval *sapi_request_object_write_property(zend_object *object, zend_string *member, zval *value, void **cache_slot)
 {
-    if( !object->ce->__get && !std_object_handlers.has_property(object, member, 2, cache_slot) ) {
-        zend_string *ce_name = object->ce->name;
-        zend_throw_exception_ex(spl_ce_RuntimeException, 0, "%.*s::$%.*s does not exist.", (int)ZSTR_LEN(ce_name), ZSTR_VAL(ce_name), (int)ZSTR_LEN(member), ZSTR_VAL(member));
-        return NULL;
-    }
-
-    if( !object->ce->__set && !std_object_handlers.has_property(object, member, 2, cache_slot) ) {
-        sapi_request_throw_readonly_exception(object, member);
-        return NULL;
-    }
-
-    struct prop_handlers *hnd = zend_hash_str_find_ptr(&SapiRequest_prop_handlers, ZSTR_VAL(member), ZSTR_LEN(member));
-    return (hnd ? hnd->write_property : std_object_handlers.write_property)(object, member, value, cache_slot);
+    return request_write_property_dispatcher(&SapiRequest_prop_handlers, object, member, value, cache_slot);
 }
 #elif PHP_MAJOR_VERSION >= 7 && PHP_MINOR_VERSION >= 4
 static zval *sapi_request_object_write_property(zval *object, zval *member, zval *value, void **cache_slot)
 {
-    if( !Z_OBJCE_P(object)->__get && !std_object_handlers.has_property(object, member, 2, cache_slot) ) {
-        zend_string *ce_name = Z_OBJCE_P(object)->name;
-        zend_string *member_str = zval_get_string(member);
-        zend_throw_exception_ex(spl_ce_RuntimeException, 0, "%.*s::$%.*s does not exist.", (int)ZSTR_LEN(ce_name), ZSTR_VAL(ce_name), (int)ZSTR_LEN(member_str), ZSTR_VAL(member_str));
-        zend_string_release(member_str);
-        return NULL;
-    }
-
-    if( !Z_OBJCE_P(object)->__set && !std_object_handlers.has_property(object, member, 2, cache_slot) ) {
-        sapi_request_throw_readonly_exception(Z_OBJ_P(object), Z_STR_P(member));
-        return NULL;
-    }
-
-    struct prop_handlers *hnd = zend_hash_str_find_ptr(&SapiRequest_prop_handlers, Z_STRVAL_P(member), Z_STRLEN_P(member));
-    return (hnd ? hnd->write_property : std_object_handlers.write_property)(object, member, value, cache_slot);
+    return request_write_property_dispatcher(&SapiRequest_prop_handlers, object, member, value, cache_slot);
 }
 #else
 static void sapi_request_object_write_property(zval *object, zval *member, zval *value, void **cache_slot)
 {
-    if( !Z_OBJCE_P(object)->__get && !std_object_handlers.has_property(object, member, 2, cache_slot) ) {
-        zend_string *ce_name = Z_OBJCE_P(object)->name;
-        zend_string *member_str = zval_get_string(member);
-        zend_throw_exception_ex(spl_ce_RuntimeException, 0, "%.*s::$%.*s does not exist.", (int)ZSTR_LEN(ce_name), ZSTR_VAL(ce_name), (int)ZSTR_LEN(member_str), ZSTR_VAL(member_str));
-        zend_string_release(member_str);
-        return;
-    }
-
-    if( !Z_OBJCE_P(object)->__set && !std_object_handlers.has_property(object, member, 2, cache_slot) ) {
-        sapi_request_throw_readonly_exception(Z_OBJ_P(object), Z_STR_P(member));
-        return;
-    }
-
-    struct prop_handlers *hnd = zend_hash_str_find_ptr(&SapiRequest_prop_handlers, Z_STRVAL_P(member), Z_STRLEN_P(member));
-    (hnd ? hnd->write_property : std_object_handlers.write_property)(object, member, value, cache_slot);
+    request_write_property_dispatcher(&SapiRequest_prop_handlers, object, member, value, cache_slot);
 }
 #endif
 /* }}} */
@@ -739,14 +638,12 @@ static void sapi_request_object_write_property(zval *object, zval *member, zval 
 #if PHP_MAJOR_VERSION >= 8
 static void sapi_request_object_unset_property(zend_object *object, zend_string *member, void **cache_slot)
 {
-    struct prop_handlers *hnd = zend_hash_str_find_ptr(&SapiRequest_prop_handlers, ZSTR_VAL(member), ZSTR_LEN(member));
-    return (hnd ? hnd->unset_property : std_object_handlers.unset_property)(object, member, cache_slot);
+    return request_unset_property_dispatcher(&SapiRequest_prop_handlers, object, member, cache_slot);
 }
 #else
 static void sapi_request_object_unset_property(zval *object, zval *member, void **cache_slot)
 {
-    struct prop_handlers *hnd = zend_hash_str_find_ptr(&SapiRequest_prop_handlers, Z_STRVAL_P(member), Z_STRLEN_P(member));
-    return (hnd ? hnd->unset_property : std_object_handlers.unset_property)(object, member, cache_slot);
+    return request_unset_property_dispatcher(&SapiRequest_prop_handlers, object, member, cache_slot);
 }
 #endif
 /* }}} */
@@ -766,28 +663,14 @@ static zval *sapi_request_object_get_property_ptr_ptr(zval *object, zval *name, 
 /* }}} */
 
 /* {{{ register_prop_handlers */
-static inline void register_prop_handlers(
-    const char *name,
-    size_t name_length,
-    zend_object_has_property_t has_property,
-    zend_object_read_property_t read_property,
-    zend_object_write_property_t write_property,
-    zend_object_unset_property_t unset_property
-) {
-    struct prop_handlers hnd = {0};
-    hnd.has_property = has_property ? has_property : std_object_handlers.has_property;
-    hnd.read_property = read_property ? read_property : std_object_handlers.read_property;
-    hnd.write_property = write_property ? write_property : std_object_handlers.write_property;
-    hnd.unset_property = unset_property ? unset_property : std_object_handlers.unset_property;
-    zend_hash_str_update_mem(&SapiRequest_prop_handlers, name, name_length, &hnd, sizeof(hnd));
-}
 static inline void register_default_prop_handlers(const char *name, size_t name_length)
 {
     register_prop_handlers(
+        &SapiRequest_prop_handlers,
         name,
         name_length,
-        sapi_request_object_default_has_property,
-        sapi_request_object_default_read_property,
+        request_readonly_has_property_handler,
+        request_readonly_read_property_handler,
         sapi_request_object_default_write_property,
         sapi_request_object_default_unset_property
     );
@@ -1206,7 +1089,14 @@ PHP_MINIT_FUNCTION(sapirequest)
     zend_declare_property_null(SapiRequest_ce_ptr, ZEND_STRL("authUser"), ZEND_ACC_PUBLIC);
     register_default_prop_handlers(ZEND_STRL("authUser"));
     zend_declare_property_null(SapiRequest_ce_ptr, ZEND_STRL("content"), ZEND_ACC_PUBLIC);
-    register_default_prop_handlers(ZEND_STRL("content"));
+    register_prop_handlers(
+        &SapiRequest_prop_handlers,
+        ZEND_STRL("content"),
+        request_readonly_has_property_handler,
+        sapi_request_object_content_read_property,
+        sapi_request_object_default_write_property,
+        sapi_request_object_default_unset_property
+    );
     zend_declare_property_null(SapiRequest_ce_ptr, ZEND_STRL("contentCharset"), ZEND_ACC_PUBLIC);
     register_default_prop_handlers(ZEND_STRL("contentCharset"));
     zend_declare_property_null(SapiRequest_ce_ptr, ZEND_STRL("contentLength"), ZEND_ACC_PUBLIC);
