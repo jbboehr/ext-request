@@ -185,7 +185,7 @@ static int request_readonly_has_property_handler(zval *object, zval *member, int
 
 /* {{{ request_readonly_read_property_handler */
 #if PHP_MAJOR_VERSION >= 8
-static zval *sapi_request_object_default_read_property(zend_object *object, zend_string *member, int type, void **cache_slot, zval *rv)
+static zval *request_readonly_read_property_handler(zend_object *object, zend_string *member, int type, void **cache_slot, zval *rv)
 {
     zval *retval;
 

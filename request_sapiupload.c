@@ -184,7 +184,7 @@ ZEND_BEGIN_ARG_INFO_EX(SapiUpload_move_args, 0, 0, 1)
 ZEND_END_ARG_INFO()
 /* }}} Argument Info */
 
-/* {{{ proto void SapiUpload::__construct() */
+/* {{{ proto void SapiUpload::__construct([string $name, [string $type, [int $size, [string $tmpName, [int $error]]]]]) */
 PHP_METHOD(SapiUpload, __construct)
 {
     zval *_this_zval = getThis();
@@ -235,7 +235,7 @@ err:
 }
 /* }}} SapiUpload::__construct */
 
-/* {{{ proto void SapiUpload::move() */
+/* {{{ proto bool SapiUpload::move(string $destination) */
 PHP_METHOD(SapiUpload, move)
 {
     zval *_this_zval = getThis();
