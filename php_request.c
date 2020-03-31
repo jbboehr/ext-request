@@ -2359,9 +2359,12 @@ static void sapi_response_sender_send_content(zval *response)
             break;
 
         case IS_RESOURCE:
-            php_stream_from_res(stream, Z_RES_P(content)); // this macro can return
-            php_stream_seek(stream, 0, SEEK_SET);
-            php_stream_passthru(stream);
+            // ported from php_stream_from_res
+            stream = zend_fetch_resource2(Z_RES_P(content), "stream", php_file_le_stream(), php_file_le_pstream());
+            if (stream) {
+                php_stream_seek(stream, 0, SEEK_SET);
+                php_stream_passthru(stream);
+            }
             break;
 
         case IS_STRING:
