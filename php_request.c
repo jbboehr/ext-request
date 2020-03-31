@@ -27,11 +27,18 @@
 #include "php_request.h"
 #include "request_utils.h"
 
+extern PHP_REQUEST_API PHP_MINIT_FUNCTION(sapiupload);
+extern PHP_REQUEST_API zend_class_entry *SapiUpload_ce_ptr;
+
+PHP_REQUEST_API zend_class_entry *SapiRequest_ce_ptr;
+PHP_REQUEST_API zend_class_entry *SapiResponse_ce_ptr;
+PHP_REQUEST_API zend_class_entry *SapiResponseInterface_ce_ptr;
+PHP_REQUEST_API zend_class_entry *SapiResponseSender_ce_ptr;
+
 static PHP_MINIT_FUNCTION(sapirequest);
 static PHP_MINIT_FUNCTION(sapiresponse);
 static PHP_MINIT_FUNCTION(sapiresponseinterface);
 static PHP_MINIT_FUNCTION(sapiresponsesender);
-PHP_MINIT_FUNCTION(sapiupload);
 static PHP_MSHUTDOWN_FUNCTION(sapirequest);
 void sapi_request_parse_forwarded(zval *return_value, const unsigned char *str, size_t len);
 
@@ -88,12 +95,6 @@ zend_module_entry request_module_entry = {
 #ifdef COMPILE_DL_REQUEST
 ZEND_GET_MODULE(request)      // Common for all PHP extensions which are build as shared modules
 #endif
-
-PHP_REQUEST_API zend_class_entry *SapiRequest_ce_ptr;
-PHP_REQUEST_API zend_class_entry *SapiResponse_ce_ptr;
-PHP_REQUEST_API zend_class_entry *SapiResponseInterface_ce_ptr;
-PHP_REQUEST_API zend_class_entry *SapiResponseSender_ce_ptr;
-extern PHP_REQUEST_API zend_class_entry *SapiUpload_ce_ptr;
 
 /* {{{ sapi_request_normalize_header_name */
 void sapi_request_normalize_header_name(char *key, size_t key_length)
@@ -254,7 +255,6 @@ static inline zend_string *sapi_request_extract_uri_from_server(zval *server)
 
 static zend_string *sapi_request_detect_url(zval *server)
 {
-    zval *tmp;
     zend_string *host;
     zend_long port;
     zend_string *uri;
@@ -643,7 +643,7 @@ static void sapi_request_object_unset_property(zend_object *object, zend_string 
 #else
 static void sapi_request_object_unset_property(zval *object, zval *member, void **cache_slot)
 {
-    return request_unset_property_dispatcher(&SapiRequest_prop_handlers, object, member, cache_slot);
+    request_unset_property_dispatcher(&SapiRequest_prop_handlers, object, member, cache_slot);
 }
 #endif
 /* }}} */
@@ -830,7 +830,6 @@ static inline void sapi_request_set_accept_by_name(zval *object, zval *server, c
 
 static inline void sapi_request_parse_accept_language(zval *lang)
 {
-    zend_string *key;
     zend_ulong index;
     zval *val;
     zval *value;
@@ -1157,7 +1156,7 @@ static inline void smart_str_appendz_ex(smart_str *dest, zval *zv, zend_bool per
 
 static inline void smart_str_appendz(smart_str *dest, zval *zv)
 {
-    return smart_str_appendz_ex(dest, zv, 0);
+    smart_str_appendz_ex(dest, zv, 0);
 }
 
 /* SapiResponseInterface ******************************************************** */
@@ -1293,7 +1292,6 @@ static void sapi_response_set_header(zval *response, zend_string *label, zend_st
     zval *prop_ptr;
     zend_string *normal_label;
     zend_string *value_str;
-    zend_string *tmp;
     zval *prev_header = NULL;
     smart_str buf = {0};
 
@@ -1632,7 +1630,6 @@ static void sapi_response_set_cookie(INTERNAL_FUNCTION_PARAMETERS, zend_bool url
     zval *response = getThis();
     zval *ptr;
     zval cookie = {0};
-    zval *arr;
 
     zend_string *name;
     zend_string *value = NULL;
@@ -1738,14 +1735,14 @@ static void sapi_response_set_cookie(INTERNAL_FUNCTION_PARAMETERS, zend_bool url
 
 PHP_METHOD(SapiResponse, setCookie)
 {
-    return sapi_response_set_cookie(INTERNAL_FUNCTION_PARAM_PASSTHRU, 1);
+    sapi_response_set_cookie(INTERNAL_FUNCTION_PARAM_PASSTHRU, 1);
 }
 /* }}} SapiResponse::setCookie */
 
 /* {{{ proto SapiResponseInterface SapiResponse::setRawCookie(string name [, string value [, int expires [, string path [, string domain [, bool secure[, bool httponly]]]]]]) */
 PHP_METHOD(SapiResponse, setRawCookie)
 {
-    return sapi_response_set_cookie(INTERNAL_FUNCTION_PARAM_PASSTHRU, 0);
+    sapi_response_set_cookie(INTERNAL_FUNCTION_PARAM_PASSTHRU, 0);
 }
 /* }}} SapiResponse::setRawCookie */
 
@@ -2082,7 +2079,6 @@ PHP_METHOD(SapiResponseSender, runHeaderCallbacks)
 static void sapi_response_sender_send_status(zval *response)
 {
     sapi_header_line ctr = {0};
-    zval *tmp;
     zval code = {0};
     zval version = {0};
     smart_str buf = {0};
@@ -2330,11 +2326,9 @@ static void sapi_response_sender_send_content(zval *response)
     zval *content;
     zend_string *content_str;
     php_stream *stream;
-    char *error;
     zval func_name = {0};
     zval rv = {0}, rv2 = {0};
     zval params[1] = {0};
-    zval *return_value;
 
     // Call getContent
 #if PHP_MAJOR_VERSION >= 8
@@ -2348,7 +2342,7 @@ static void sapi_response_sender_send_content(zval *response)
     if( Z_TYPE_P(content) == IS_OBJECT && zend_is_callable(content, 0, NULL) ) {
         ZVAL_STRING(&func_name, "__invoke");
         ZVAL_ZVAL(&params[0], response, 1, 0);
-        call_user_function(&Z_OBJCE_P(content)->function_table, content, &func_name, &rv, 1, &params);
+        call_user_function(&Z_OBJCE_P(content)->function_table, content, &func_name, &rv, 1, params);
         zval_ptr_dtor(&func_name);
         zval_ptr_dtor(&params[0]);
         content = &rv;

@@ -1,4 +1,7 @@
 
+#include "Zend/zend_API.h"
+#include "Zend/zend_exceptions.h"
+
 #include "ext/spl/spl_exceptions.h"
 
 struct prop_handlers {
@@ -169,7 +172,7 @@ static void request_unset_property_dispatcher(HashTable *handlers, zval *object,
 
 /* {{{ request_readonly_has_property_handler */
 #if PHP_MAJOR_VERSION >= 8
-static int request_readonly_has_property_handler(zend_object *object, zend_object *member, int check_empty, void **cache_slot)
+static int request_readonly_has_property_handler(zend_object *object, zend_string *member, int check_empty, void **cache_slot)
 {
     return 1;
 }

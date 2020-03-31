@@ -260,7 +260,7 @@ PHP_METHOD(SapiUpload, move)
 
     ZVAL_STRING(&func_name, "move_uploaded_file");
 
-    retval = call_user_function(NULL, NULL, &func_name, return_value, 2, &params);
+    retval = call_user_function(NULL, NULL, &func_name, return_value, 2, params);
     if (retval) {
         ZVAL_ZVAL(return_value, retval, 1, 0);
     }
@@ -281,7 +281,7 @@ static zend_function_entry SapiUpload_methods[] = {
 /* }}} SapiResponseSender methods */
 
 /* {{{ PHP_MINIT_FUNCTION */
-PHP_MINIT_FUNCTION(sapiupload)
+PHP_REQUEST_API PHP_MINIT_FUNCTION(sapiupload)
 {
     zend_class_entry SapiUpload_ce;
 
