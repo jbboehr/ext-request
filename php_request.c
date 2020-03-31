@@ -27,13 +27,13 @@
 #include "php_request.h"
 #include "request_utils.h"
 
-extern PHP_REQUEST_API PHP_MINIT_FUNCTION(sapiupload);
-extern PHP_REQUEST_API zend_class_entry *SapiUpload_ce_ptr;
+extern PHP_MINIT_FUNCTION(sapiupload);
+extern zend_class_entry *SapiUpload_ce_ptr;
 
-PHP_REQUEST_API zend_class_entry *SapiRequest_ce_ptr;
-PHP_REQUEST_API zend_class_entry *SapiResponse_ce_ptr;
-PHP_REQUEST_API zend_class_entry *SapiResponseInterface_ce_ptr;
-PHP_REQUEST_API zend_class_entry *SapiResponseSender_ce_ptr;
+zend_class_entry *SapiRequest_ce_ptr;
+zend_class_entry *SapiResponse_ce_ptr;
+zend_class_entry *SapiResponseInterface_ce_ptr;
+zend_class_entry *SapiResponseSender_ce_ptr;
 
 static PHP_MINIT_FUNCTION(sapirequest);
 static PHP_MINIT_FUNCTION(sapiresponse);
