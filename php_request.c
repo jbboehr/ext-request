@@ -28,19 +28,20 @@
 #include "request_utils.h"
 
 extern PHP_MINIT_FUNCTION(sapiupload);
-extern zend_class_entry *SapiUpload_ce_ptr;
+extern PHP_MSHUTDOWN_FUNCTION(sapiupload);
 
-zend_class_entry *SapiRequest_ce_ptr;
-zend_class_entry *SapiResponse_ce_ptr;
-zend_class_entry *SapiResponseInterface_ce_ptr;
-zend_class_entry *SapiResponseSender_ce_ptr;
+extern void sapi_request_parse_forwarded(zval *return_value, const unsigned char *str, size_t len);
 
 static PHP_MINIT_FUNCTION(sapirequest);
 static PHP_MINIT_FUNCTION(sapiresponse);
 static PHP_MINIT_FUNCTION(sapiresponseinterface);
 static PHP_MINIT_FUNCTION(sapiresponsesender);
 static PHP_MSHUTDOWN_FUNCTION(sapirequest);
-void sapi_request_parse_forwarded(zval *return_value, const unsigned char *str, size_t len);
+
+PHP_REQUEST_API zend_class_entry *SapiRequest_ce_ptr;
+PHP_REQUEST_API zend_class_entry *SapiResponse_ce_ptr;
+PHP_REQUEST_API zend_class_entry *SapiResponseInterface_ce_ptr;
+PHP_REQUEST_API zend_class_entry *SapiResponseSender_ce_ptr;
 
 /* {{{ PHP_MINIT_FUNCTION */
 static PHP_MINIT_FUNCTION(request)
@@ -67,6 +68,7 @@ static PHP_MINFO_FUNCTION(request)
 static PHP_MSHUTDOWN_FUNCTION(request)
 {
     PHP_MSHUTDOWN(sapirequest)(SHUTDOWN_FUNC_ARGS_PASSTHRU);
+    PHP_MSHUTDOWN(sapiupload)(SHUTDOWN_FUNC_ARGS_PASSTHRU);
     return SUCCESS;
 }
 /* }}} */
